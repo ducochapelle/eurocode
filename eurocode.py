@@ -1,7 +1,9 @@
-from member.member import *
 from pint import UnitRegistry
+import logging
 import math
+
 u = UnitRegistry()
+logging.basicConfig(level=logging.INFO)
 
 '''
 + exec(s)
@@ -34,7 +36,9 @@ Assymetrisch: PinSide(string)
 Gegeven dikte: HoleB(string)
 Suggereerde dikte: HoleA(string)
 
-3. Las verbinding
+3. Sections
+
+4. Las verbinding
 
 sigma_vm < fu / beta / ym2
 
@@ -57,6 +61,7 @@ def execprint(f, extra_units=[]):
     execprint_units = [u.dimensionless, u.kN, u.mm, u.mm**2, u.m**3, u.m/u.s, u.kg, u.MPa]
     args = []
     for line in f.splitlines():
+        logging.debug(line)
         exec(line)
         if '# => {' in line:
             line1 = line.split('#')[0]
@@ -85,6 +90,40 @@ def pprint(s):
     s = s.replace("\n## " ,"\n")
     print(s)
 
+def Stability(f):
+    '''A, I, E, L, fy, a, yM1'''
+    return Header("Stability")+f+'''
+Ny  = A*fy           # => {:.0f~}
+Ncr = math.pi**2*E*I/L**2 # => {:.0f~}
+λ   = (A*fy/Ncr)**.5
+φ   = 0.5*(1+a*(λ-0.2)+λ**2)
+χ   = 1/(φ+(φ**2-λ**2)**.5)
+NbRd= χ*A*fy/ym1     # => {:.0f~}'''
+
+def Stability_FE_DNV(f):
+    '''kg, σR, fy, γm, γf -> Rd
+	kg	= load multiplier
+	σR 	= stress occurring at buckle
+	fy 	= yield stress
+	γm 	= material factor
+	γf      = load factor
+	'''
+    return Header('Stability FE DNV')+f+'''
+λ 	= (fy / σR / kg)**.5
+φ	= 0.5*(1 + 0.5*(λ - 0.2) + λ**2)
+κ 	= 1/(φ + (φ**2 - λ**2)**.5)
+λ # => {:.2f~}
+φ # => {:.2f~}
+κ # => {:.2f~}
+Rd 	= κ * fy * γf / γm / σR # => {:.2f~}'''
+
+def FatigueSN(f):
+    '''fy, n'''
+    return Header('Fatigue')+f+'''
+α = min(n,1e8)
+β = 3 if n < 5e2 else 5
+fy * (α/2e6) ** (-1/β) # => {:.0f~}'''
+
 def PinMidHole(f):
     return PinHole(PinMid(f))
 
@@ -106,7 +145,7 @@ d0  = d*1.03''')
 def PinMid(f):
     return Pin(f+'''
 #
-#    | FbEd1       Λ FbEd      | FbEd2
+#    | FbEd1       ^ FbEd      | FbEd2
 #    V             | = Fed     V
 #   
 # |-a1-|   c1   |--b---| c2 |-a2-|
@@ -116,12 +155,12 @@ L2= (2*a2+b+4*c2)/4
 FvEd1 = Fed * L2/(L1+L2) # => {:.0f~}
 FvEd2 = Fed * L1/(L1+L2) # => {:.0f~}
 FvEd = max(FvEd1,FvEd2)
-M_Ed  = L1*FvEd1''')
+M_Ed  = L1*FvEd1 # => {:.0f~}''')
 
 def PinSide(f):
     return Pin(f+'''
 #
-#    | FbEd1       Λ FbEd      | FbEd2
+#    | FbEd1       ^ FbEd      | FbEd2
 #    V = Fed       |           V
 #   
 # |-a1-|   c1   |--b---| c2 |-a2-|
@@ -131,7 +170,7 @@ L2= (2*a2+b+4*c2)/4
 FvEd1 = Fed         # => {:.0f~}
 FvEd2 = Fed * L1/L2 # => {:.0f~}
 FvEd = max(FvEd1,FvEd2)
-M_Ed  = L1*FvEd1''')
+M_Ed  = L1*FvEd1 # => {:.0f~}''')
 
 def Pin(f):
     return Header("Pin")+f+'''
@@ -139,14 +178,14 @@ fy = min(fy, fyp)
 A = math.pi/4*d**2 
 W = math.pi/32*d**3
 
-FvRd = 0.6*A*fup/ym2
-M_Rd = 1.5*W*fyp/ym0
+FvRd = 0.6*A*fup/ym2 # => {:.0f~}
+M_Rd = 1.5*W*fyp/ym0 # => {:.0f~}
 
 FvEd / FvRd # => {:.2f~}
 M_Ed / M_Rd # => {:.2f~}
 ((M_Ed/M_Rd)**2+(FvEd/FvRd)**2)**.5 # => {:.2f~}
 
-FbEd1 = FvEd1  # => {:.0f~}
+FbEd1 = FvEd1 # => {:.0f~}
 FbEd2 = FvEd2 # => {:.0f~}
 FbEd  = FvEd1 + FvEd2 # => {:.0f~}
 FbRd1 = 1.5*a1*d*fy/ym0
@@ -179,53 +218,34 @@ d0 # => {:.0f~}
 R  # => {:.0f~}
 e  # => {:.0f~}'''
 
-summary = Header('summary',level=1)
+def Bar(f):
+    '''t -> A I'''
+    return Header('Bar')+f+'''
+A = t**2      # => {:.2e~}
+I = 1/12*t**4 # => {:.2e~}'''
 
-partialfactors = '''
-ym0 = 1
-ym1 = 1
-ym2 = 1.25'''
+def Rod(f):
+    '''D -> A I'''
+    return Header('Rod')+f+'''
+r = D/2
+A = math.pi*r**2   # => {:.2e~}
+I = math.pi/4*r**4 # => {:.2e~}'''
 
-f = HoleB('''
-Fed= 1000*u.kN
-fy = 220*u.MPa
-d0 = 20*u.mm
-t  = 10*u.mm
-ym0= 1''')
+def RoundTube(f):
+    '''D, t'''
+    return Header('Round Tube')+f+'''
+Ro = D/2
+Ri = D/2-t
+A  = math.pi*(Ro**2-Ri**2)   # => {:.2e~}
+I  = math.pi/4*(Ro**4-Ri**4) # => {:.2e~}'''
 
-f += HoleA('''
-Fed= 1000*u.kN
-fy = 220*u.MPa
-ym0= 1''')
-
-f += PinMid(partialfactors+'''
-Fed= 3000*u.kN
-fy = 220*u.MPa
-fyp= 300*u.MPa
-fup= 400*u.MPa
-d  = 20*u.mm
-a1 = 5*u.mm
-a2 = 10*u.mm
-b  = 15*u.mm
-c1 = 20*u.mm
-c2 = 10*u.mm''')
-
-f = Header("Nou hier gebeurt het hoor!", level=1)
-f += PinMidHole(partialfactors+'''
-Fed= 100*u.kN
-fy = 220*u.MPa
-fyp= 300*u.MPa
-fup= 400*u.MPa
-d  = 20*u.mm
-a1 = 20*u.mm
-a2 = 20*u.mm
-b  = 40*u.mm
-c1 = 20*u.mm
-c2 = 10*u.mm''')
-
-execprint(f)#, extra_units=[u.N]) # holy fuck the unitless gaan over de zeik hier
-pprint(summary)
-
+def SquareTube(f):
+    '''D, t'''
+    return Header('Square Tube')+f+'''
+Do = D
+Di = D-2*t
+A  = Do**2-Di**2      # => {:.2e~}
+I  = (Do**4-Di**4)/12 # => {:.2e~}'''
 
 def LoadFactors(grens, gevolg):
     '''
@@ -271,6 +291,135 @@ def Beta(fu, t):
     elif fu <= 520: return 1.00*k
     elif fu <= 540: return 1.00*k
     else: return 1.00
+
+#############################
+###                       ###
+###   START USER SCRIPT   ###
+###                       ###
+#############################
+
+summary = Header('summary',level=1)
+
+PARTIAL_FACTORS = '''
+ym0 = 1
+ym1 = 1
+ym2 = 1.25'''
+
+STEEL = '''
+E = 210*u.GPa
+rho = 7860*u.kg/u.m**3
+'''
+
+f = PARTIAL_FACTORS
+
+f += Header('Scharnier Boven', level=2)
+f += PinSideHole('''
+Fed= 1900*u.kN
+fy = 335*u.MPa
+fyp= 1080*u.MPa
+fup= 635*u.MPa
+d  = 220*u.mm
+a1 = 120*u.mm
+a2 = 20*u.mm
+b  = 60*u.mm
+c1 = 310*u.mm
+c2 = 420*u.mm''')
+
+f += Header('Cylinder verbinding', level=2)
+f += PinMidHole('''
+Fed = 1.5*1500*u.kN
+fy  = 335*u.MPa
+fyp = 1080*u.MPa
+fup = 635*u.MPa
+d   = 160*u.mm
+a1 = a2 = 20*u.mm
+a2  = 20*u.mm
+b   = 110*u.mm
+c1 = c2 = 175*u.mm''')
+
+execprint(f, extra_units=[u.kN*u.m]) # holy fuck the unitless gaan over de zeik hier
+pprint(summary)
+
+f = PARTIAL_FACTORS
+f += STEEL
+f += Stability('''
+A = 1.71E+04*u.mm**2
+I = 2.32E+08*u.mm**4
+L = 10*u.m
+a = 0.34
+fy= 355*u.MPa''')
+
+f += FatigueSN('''
+fy = 160*u.MPa
+n  = 5e5''')
+
+execprint(f)
+
+
+f = Header('Bucket', level=1)
+f += Header('Weld partial pen 40, F G', level=3)
+f += RoundTube('''
+D = 200*u.mm
+t = 40*u.mm''')
+f += '''
+
+F = 7.11e5*u.N
+L = 50*u.mm
+
+τ = F / A     # => {:.0f~}
+σ = F*L*D/2/I # => {:.0f~}
+σ_vm = (σ**2 + 3*τ**2)**.5
+fy = 355*u.MPa
+1.5*σ_vm/fy # => {:.2f~}'''
+
+f += Header('Hinge 1, D E', level=3)
+
+f += Rod('''
+D = 200*u.mm''')
+f += '''
+
+F = 5.45e5*u.N
+L = 50*u.mm
+
+τ = F / A     # => {:.0f~}
+σ = F*L*D/2/I # => {:.0f~}
+σ_vm = (σ**2 + 3*τ**2)**.5
+fy = 355*u.MPa
+1.5*σ_vm/fy # => {:.2f~}'''
+
+f += Header('Hinge 2, A', level=3)
+
+f += Rod('''
+D = 200*u.mm''')
+f += '''
+
+F = 4.19e5*u.N
+L = 50*u.mm
+
+τ = F / A     # => {:.0f~}
+σ = F*L*D/2/I # => {:.0f~}
+σ_vm = (σ**2 + 3*τ**2)**.5
+fy = 355*u.MPa
+1.5*σ_vm/fy # => {:.2f~}'''
+
+execprint(f)
+
+
+f = Stability_FE_DNV('''
+kg = 36.6
+σR = 20*u.MPa
+fy = 355*u.MPa
+γm = 1.15
+γf = 1.3''')
+
+execprint(f)
+
+
+#############################
+###                       ###
+###    END USER SCRIPT    ###
+###                       ###
+#############################
 
 # redundant safety measure for working with units
 assert u.stathenry, 'Variable u is overwritten?'
